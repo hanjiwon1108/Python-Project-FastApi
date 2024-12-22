@@ -1,71 +1,109 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 import pandas as pd
-import random
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
+from fastapi import Request
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+
+font_path = "/System/Library/Fonts/Supplemental/AppleGothic.ttf"
+fontprop = fm.FontProperties(fname=font_path)
+
+plt.rc('font', family=fontprop.get_name())
+
+
 
 app = FastAPI()
+templates = Jinja2Templates(directory="templates")
+data = [
+    {"date": "2023-01-01", "weight": 70.0, "exercise_time": 30.0, "calories": 2000.0},
+    {"date": "2023-01-02", "weight": 69.5, "exercise_time": 45.0, "calories": 2100.0},
+    {"date": "2023-01-03", "weight": 69.0, "exercise_time": 60.0, "calories": 2200.0},
+]
 
-# 1. 날씨 데이터 생성
-def generate_weather_data():
-    cities = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "수원"]
-    weather_conditions = ["맑음", "구름 많음", "비", "눈", "흐림", "바람"]
+class HealthData(BaseModel):
+    date: str  
+    weight: float
+    exercise_time: float  
+    calories: float  
 
-    data = []
-    for city in cities:
-        temperature = round(random.uniform(-5, 35), 1)  # -5도에서 35도 사이
-        humidity = random.randint(30, 90)  # 30%에서 90% 사이
-        condition = random.choice(weather_conditions)
+@app.post("/add_data/")
+async def add_health_data(item: HealthData):
+    data.append(item.dict())
+    return {"message": "데이터가 성공적으로 추가되었습니다!"}
 
-        # Python 3.10의 구조적 패턴 매칭을 사용하여 날씨 상태 분류
-        match condition:
-            case "맑음":
-                icon = "☀️"
-            case "구름 많음":
-                icon = "☁️"
-            case "비":
-                icon = "🌧️"
-            case "눈":
-                icon = "❄️"
-            case "흐림":
-                icon = "🌥️"
-            case "바람":
-                icon = "💨"
-            case _:
-                icon = "❓"
-
-        data.append({
-            "도시": city,
-            "온도 (°C)": temperature,
-            "습도 (%)": humidity,
-            "날씨": f"{condition} {icon}"  # 날씨 상태와 아이콘 결합
-        })
-
-    return pd.DataFrame(data)
-
-# 2. FastAPI 엔드포인트 작성하기
-@app.get("/", response_class=HTMLResponse)
-async def show_weather():
-    df = generate_weather_data()
+@app.get("/summary/")
+async def get_summary():
+    if not data:
+        raise HTTPException(status_code=404, detail="데이터가 없습니다")
     
-    # HTML 테이블로 변환
-    table_html = df.to_html(index=False, escape=False, justify="center", border=1)
+    df = pd.DataFrame(data)
+    return {
+        "total_days": len(df),
+        "average_weight": df["weight"].mean(),
+        "average_exercise_time": df["exercise_time"].mean(),
+        "average_calories": df["calories"].mean(),
+    }
 
-    # HTML 페이지 생성
-    html_content = f"""
-    <html>
-        <head>
-            <title>대한민국 주요 도시 날씨</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; text-align: center; }}
-                table {{ margin: 0 auto; border-collapse: collapse; width: 80%; }}
-                th, td {{ padding: 10px; border: 1px solid #ddd; text-align: center; }}
-                th {{ background-color: #f4f4f4; }}
-            </style>
-        </head>
-        <body>
-            <h1>대한민국 주요 도시 날씨 정보</h1>
-            {table_html}
-        </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
+@app.get("/visualize/")
+async def visualize_data():
+    if not data:
+        raise HTTPException(status_code=404, detail="데이터가 없습니다")
+    
+    df = pd.DataFrame(data)
+    fig, ax = plt.subplots(3, 1, figsize=(8, 12))
+    
+    for i, (col, title, ylabel, color) in enumerate(zip(
+        ["weight", "exercise_time", "calories"],
+        ["체중 변화", "운동 시간 변화", "칼로리 변화"],
+        ["체중 (kg)", "운동 시간 (분)", "칼로리 (kcal)"],
+        ["blue", "green", "red"]
+    )):
+        ax[i].plot(df["date"], df[col], marker='o', label=title, color=color)
+        ax[i].set_title(title)
+        ax[i].set_xlabel("날짜")
+        ax[i].set_ylabel(ylabel)
+        ax[i].legend()
+    
+    plt.tight_layout()
+    
+    buffer = BytesIO()
+    plt.savefig(buffer, format="png")
+    buffer.seek(0)
+    img_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+    buffer.close()
+    
+    return {"image": img_base64}
+@app.get("/visualize_html/", response_class=HTMLResponse)
+async def visualize_data_html(request: Request):
+    if not data:
+        raise HTTPException(status_code=404, detail="데이터가 없습니다")
+    
+    df = pd.DataFrame(data)
+    fig, ax = plt.subplots(3, 1, figsize=(8, 12))
+    
+    for i, (col, title, ylabel, color) in enumerate(zip(
+        ["weight", "exercise_time", "calories"],
+        ["체중 변화", "운동 시간 변화", "칼로리 변화"],
+        ["체중 (kg)", "운동 시간 (분)", "칼로리 (kcal)"],
+        ["blue", "green", "red"]
+    )):
+        ax[i].plot(df["date"], df[col], marker='o', label=title, color=color)
+        ax[i].set_title(title)
+        ax[i].set_xlabel("날짜")
+        ax[i].set_ylabel(ylabel)
+        ax[i].legend()
+    
+    plt.tight_layout()
+    
+    buffer = BytesIO()
+    plt.savefig(buffer, format="png")
+    buffer.seek(0)
+    img_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+    buffer.close()
+    
+    return templates.TemplateResponse("visualization.html", {"request": request, "image": img_base64})
